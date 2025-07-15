@@ -12,27 +12,42 @@ API_KEY = st.secrets["YOUTUBE_API_KEY"]
 @st.cache_data(show_spinner=False)
 def get_channel_id(url: str) -> str | None:
     """
-    Extracts a channel ID from YouTube URLs (/channel/, /user/, /c/, or custom URL).
+    Extracts a channel ID from YouTube URLs.
+    Supports:
+      - /channel/CHANNEL_ID
+      - /user/USERNAME
+      - /c/CUSTOM_NAME
+      - /@HANDLE
+      - fallback search by last path segment
     """
     youtube = build("youtube", "v3", developerKey=API_KEY)
+    # Standard channel links
     if "/channel/" in url:
         return url.split("/channel/")[1].split("/")[0]
-    elif "/user/" in url:
+    # Legacy username links
+    if "/user/" in url:
         username = url.split("/user/")[1].split("/")[0]
         res = youtube.channels().list(part="id", forUsername=username).execute()
         items = res.get("items", [])
         return items[0]["id"] if items else None
-    elif "/c/" in url:
+    # Custom URL
+    if "/c/" in url:
         custom = url.split("/c/")[1].split("/")[0]
         res = youtube.search().list(part="snippet", q=custom, type="channel", maxResults=1).execute()
         items = res.get("items", [])
         return items[0]["snippet"]["channelId"] if items else None
-    else:
-        # Try to search channel by name
-        name = url.rstrip("/").split("/")[-1]
-        res = youtube.search().list(part="snippet", q=name, type="channel", maxResults=1).execute()
+    # Handle URL
+    if "/@" in url:
+        handle = url.split("/@")[1].split("/")[0]
+        # Search channels by handle text
+        res = youtube.search().list(part="snippet", q=handle, type="channel", maxResults=1).execute()
         items = res.get("items", [])
         return items[0]["snippet"]["channelId"] if items else None
+    # Fallback: search by last segment
+    name = url.rstrip("/").split("/")[-1]
+    res = youtube.search().list(part="snippet", q=name, type="channel", maxResults=1).execute()
+    items = res.get("items", [])
+    return items[0]["snippet"]["channelId"] if items else None
 
 @st.cache_data(show_spinner=False)
 def fetch_videos(channel_id: str) -> list[dict]:
@@ -75,7 +90,8 @@ def fetch_videos(channel_id: str) -> list[dict]:
 
 # Streamlit App UI
 st.title("YouTube Channel Comment Sorter")
-channel_url = st.text_input("YouTube Channel URL", placeholder="https://www.youtube.com/channel/...")
+
+channel_url = st.text_input("YouTube Channel URL", placeholder="https://www.youtube.com/channel/... or /@handle or /c/name")
 filter_option = st.selectbox(
     "Filter by content type",
     ["Both", "Videos (>3 mins)", "Shorts (<=3 mins)"]
@@ -84,7 +100,7 @@ filter_option = st.selectbox(
 if channel_url:
     channel_id = get_channel_id(channel_url)
     if not channel_id:
-        st.error("Could not extract channel ID. Check URL format.")
+        st.error("Could not extract channel ID. Check URL format or API quotas.")
     else:
         with st.spinner("Fetching videos..."):
             all_videos = fetch_videos(channel_id)
